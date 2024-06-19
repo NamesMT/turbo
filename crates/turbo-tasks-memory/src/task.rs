@@ -31,7 +31,7 @@ use crate::{
         AggregationDataGuard, PreparedOperation,
     },
     cell::Cell,
-    edges_set::{TaskDependency, TaskDependencySet},
+    edges_set::{TaskDependenciesList, TaskDependency, TaskDependencySet},
     gc::{GcQueue, GcTaskState},
     output::{Output, OutputContent},
     task::aggregation::{TaskAggregationContext, TaskChange},
@@ -330,7 +330,7 @@ enum TaskStateType {
         /// there might affect this task.
         ///
         /// This back-edge is [Cell] `dependent_tasks`, which is a weak edge.
-        dependencies: TaskDependencySet,
+        dependencies: TaskDependenciesList,
     },
 
     /// Execution is invalid, but not yet scheduled
@@ -338,7 +338,7 @@ enum TaskStateType {
     /// on activation this will move to Scheduled
     Dirty {
         event: Event,
-        outdated_dependencies: TaskDependencySet,
+        outdated_dependencies: TaskDependenciesList,
     },
 
     /// Execution is invalid and scheduled
@@ -346,7 +346,7 @@ enum TaskStateType {
     /// on start this will move to InProgress or Dirty depending on active flag
     Scheduled {
         event: Event,
-        outdated_dependencies: TaskDependencySet,
+        outdated_dependencies: TaskDependenciesList,
     },
 
     /// Execution is happening
@@ -582,7 +582,7 @@ impl Task {
     #[cfg(not(feature = "report_expensive"))]
     fn clear_dependencies(
         &self,
-        dependencies: TaskDependencySet,
+        dependencies: impl IntoIterator<Item = TaskDependency>,
         backend: &MemoryBackend,
         turbo_tasks: &dyn TurboTasksBackendApi<MemoryBackend>,
     ) {
@@ -594,7 +594,7 @@ impl Task {
     #[cfg(feature = "report_expensive")]
     fn clear_dependencies(
         &self,
-        dependencies: TaskDependencySet,
+        dependencies: impl IntoIterator<Item = TaskDependency>,
         backend: &MemoryBackend,
         turbo_tasks: &dyn TurboTasksBackendApi<MemoryBackend>,
     ) {
@@ -907,7 +907,6 @@ impl Task {
                         if !backend.has_gc() {
                             // This will stay here for longer, so make sure to not consume too much
                             // memory
-                            dependencies.shrink_to_fit();
                             for cells in state.cells.values_mut() {
                                 cells.shrink_to_fit();
                             }
@@ -915,7 +914,7 @@ impl Task {
                         }
                         state.state_type = Done {
                             stateful,
-                            dependencies,
+                            dependencies: dependencies.into_list(),
                         };
                         if !count_as_finished {
                             let mut change = TaskChange {
@@ -1505,9 +1504,7 @@ impl Task {
                 TaskStateType::Done {
                     dependencies,
                     stateful,
-                    ..
                 } => {
-                    dependencies.shrink_to_fit();
                     if *stateful {
                         return false;
                     }
