@@ -3,7 +3,7 @@ use std::{
     cell::RefCell,
     fmt::{self, Debug, Display, Formatter},
     future::Future,
-    hash::{BuildHasherDefault, Hash},
+    hash::Hash,
     mem::{replace, take},
     pin::Pin,
     sync::{atomic::AtomicU32, Arc},
@@ -11,10 +11,9 @@ use std::{
 };
 
 use anyhow::Result;
-use auto_hash_map::{AutoMap, AutoSet};
+use auto_hash_map::AutoMap;
 use nohash_hasher::BuildNoHashHasher;
 use parking_lot::{Mutex, RwLock};
-use rustc_hash::FxHasher;
 use smallvec::SmallVec;
 use tokio::task_local;
 use tracing::Span;
@@ -32,6 +31,7 @@ use crate::{
         AggregationDataGuard, PreparedOperation,
     },
     cell::Cell,
+    edges_set::{TaskDependency, TaskDependencySet},
     gc::{GcQueue, GcTaskState},
     output::{Output, OutputContent},
     task::aggregation::{TaskAggregationContext, TaskChange},
@@ -43,14 +43,6 @@ pub type NativeTaskFn = Box<dyn Fn() -> NativeTaskFuture + Send + Sync>;
 
 mod aggregation;
 mod meta_state;
-
-#[derive(Hash, Copy, Clone, PartialEq, Eq)]
-pub enum TaskDependency {
-    Output(TaskId),
-    Cell(TaskId, CellId),
-    Collectibles(TaskId, TraitTypeId),
-}
-pub type TaskDependencySet = AutoSet<TaskDependency, BuildHasherDefault<FxHasher>>;
 
 task_local! {
     /// Cells/Outputs/Collectibles that are read during task execution
