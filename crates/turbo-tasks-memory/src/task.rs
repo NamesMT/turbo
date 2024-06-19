@@ -576,6 +576,9 @@ impl Task {
                 let mut aggregation = aggregation_context.aggregation_data(task);
                 aggregation.remove_collectible_dependent_task(trait_type, reader);
             }
+            TaskDependency::Child(_) => {
+                panic!("Children should not be removed via remove_dependency")
+            }
         }
     }
 
@@ -903,7 +906,7 @@ impl Task {
                         #[cfg(feature = "lazy_remove_children")]
                         let outdated_children = take(outdated_children);
                         let outdated_collectibles = outdated_collectibles.take_collectibles();
-                        let mut dependencies = take(&mut dependencies);
+                        let dependencies = take(&mut dependencies);
                         if !backend.has_gc() {
                             // This will stay here for longer, so make sure to not consume too much
                             // memory
