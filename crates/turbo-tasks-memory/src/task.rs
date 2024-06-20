@@ -358,7 +358,6 @@ enum TaskStateType {
         event: Event,
         count_as_finished: bool,
         /// Children that need to be disconnected once leaving this state
-        #[cfg(feature = "lazy_remove_children")]
         outdated_children: TaskIdSet,
         outdated_dependencies: TaskDependenciesList,
         outdated_collectibles: MaybeCollectibles,
@@ -637,8 +636,6 @@ impl Task {
         let mut aggregation_context = TaskAggregationContext::new(turbo_tasks, backend);
         let (future, span) = {
             let mut state = self.full_state_mut();
-            #[cfg(not(feature = "lazy_remove_children"))]
-            let remove_job;
             match state.state_type {
                 Done { .. } | InProgress { .. } | InProgressDirty { .. } => {
                     // should not start in this state
@@ -652,16 +649,9 @@ impl Task {
                     let outdated_dependencies = take(outdated_dependencies);
                     let outdated_children = take(&mut state.children);
                     let outdated_collectibles = take(&mut state.collectibles);
-                    #[cfg(not(feature = "lazy_remove_children"))]
-                    {
-                        remove_job = state
-                            .aggregation_node
-                            .remove_children_job(&aggregation_context, outdated_children);
-                    }
                     state.state_type = InProgress {
                         event,
                         count_as_finished: false,
-                        #[cfg(feature = "lazy_remove_children")]
                         outdated_children,
                         outdated_dependencies,
                         outdated_collectibles,
@@ -675,13 +665,7 @@ impl Task {
                     )
                 }
             };
-            let result = self.make_execution_future(backend, turbo_tasks);
-            #[cfg(not(feature = "lazy_remove_children"))]
-            {
-                remove_job();
-            }
-            #[allow(clippy::let_and_return)]
-            result
+            self.make_execution_future(backend, turbo_tasks)
         };
         aggregation_context.apply_queued_updates();
         Some(TaskExecutionSpec { future, span })
@@ -757,7 +741,6 @@ impl Task {
         };
         let TaskStateType::InProgress {
             ref mut count_as_finished,
-            #[cfg(feature = "lazy_remove_children")]
             ref mut outdated_children,
             ref mut outdated_collectibles,
             ..
@@ -771,7 +754,6 @@ impl Task {
         *count_as_finished = true;
         let mut aggregation_context = TaskAggregationContext::new(turbo_tasks, backend);
         {
-            #[cfg(feature = "lazy_remove_children")]
             let outdated_children = take(outdated_children);
             let outdated_collectibles = outdated_collectibles.take_collectibles();
 
@@ -789,7 +771,6 @@ impl Task {
             let change_job = state
                 .aggregation_node
                 .apply_change(&aggregation_context, change);
-            #[cfg(feature = "lazy_remove_children")]
             let remove_job = if outdated_children.is_empty() {
                 None
             } else {
@@ -801,7 +782,6 @@ impl Task {
             };
             drop(state);
             change_job.apply(&aggregation_context);
-            #[cfg(feature = "lazy_remove_children")]
             remove_job.apply(&aggregation_context);
         }
         aggregation_context.apply_queued_updates();
@@ -870,7 +850,6 @@ impl Task {
         let mut schedule_task = false;
         {
             let mut change_job = None;
-            #[cfg(feature = "lazy_remove_children")]
             let mut remove_job = None;
             let mut dependencies = DEPENDENCIES_TO_TRACK.with(|deps| deps.take());
             {
@@ -883,13 +862,11 @@ impl Task {
                     InProgress {
                         ref mut event,
                         count_as_finished,
-                        #[cfg(feature = "lazy_remove_children")]
                         ref mut outdated_children,
                         ref mut outdated_dependencies,
                         ref mut outdated_collectibles,
                     } => {
                         let event = event.take();
-                        #[cfg(feature = "lazy_remove_children")]
                         let outdated_children = take(outdated_children);
                         let mut outdated_dependencies = take(outdated_dependencies);
                         let outdated_collectibles = outdated_collectibles.take_collectibles();
@@ -923,7 +900,6 @@ impl Task {
                                 .aggregation_node
                                 .apply_change(&aggregation_context, change);
                         }
-                        #[cfg(feature = "lazy_remove_children")]
                         if !outdated_children.is_empty() {
                             remove_job = state.aggregation_node.handle_lost_edges(
                                 &aggregation_context,
@@ -963,7 +939,6 @@ impl Task {
                 self.clear_dependencies(dependencies, backend, turbo_tasks);
             }
             change_job.apply(&aggregation_context);
-            #[cfg(feature = "lazy_remove_children")]
             remove_job.apply(&aggregation_context);
         }
         if let TaskType::Once(_) = self.ty {
@@ -1090,13 +1065,11 @@ impl Task {
                 InProgress {
                     ref mut event,
                     count_as_finished,
-                    #[cfg(feature = "lazy_remove_children")]
                     ref mut outdated_children,
                     ref mut outdated_dependencies,
                     ref mut outdated_collectibles,
                 } => {
                     let event = event.take();
-                    #[cfg(feature = "lazy_remove_children")]
                     let outdated_children = take(outdated_children);
                     let outdated_dependencies = take(outdated_dependencies);
                     let outdated_collectibles = outdated_collectibles.take_collectibles();
@@ -1127,7 +1100,6 @@ impl Task {
                             .aggregation_node
                             .apply_change(&aggregation_context, change)
                     });
-                    #[cfg(feature = "lazy_remove_children")]
                     let remove_job = state.aggregation_node.handle_lost_edges(
                         &aggregation_context,
                         &self.id,
@@ -1139,7 +1111,6 @@ impl Task {
                     };
                     drop(state);
                     change_job.apply(&aggregation_context);
-                    #[cfg(feature = "lazy_remove_children")]
                     remove_job.apply(&aggregation_context);
                 }
             }
@@ -1316,7 +1287,6 @@ impl Task {
             {
                 let mut state = self.full_state_mut();
                 if state.children.insert(child_id) {
-                    #[cfg(feature = "lazy_remove_children")]
                     if let TaskStateType::InProgress {
                         outdated_children, ..
                     } = &mut state.state_type
