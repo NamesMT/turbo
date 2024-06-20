@@ -1,10 +1,6 @@
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    hash::BuildHasherDefault,
-    mem::replace,
-};
+use std::{hash::BuildHasherDefault, mem::replace};
 
-use auto_hash_map::AutoSet;
+use auto_hash_map::{map::Entry, AutoMap, AutoSet};
 use nohash_hasher::BuildNoHashHasher;
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
@@ -446,13 +442,13 @@ impl EdgesEntry {
 
 #[derive(Default)]
 pub struct TaskDependencySet {
-    edges: HashMap<TaskId, EdgesEntry, BuildNoHashHasher<TaskId>>,
+    edges: AutoMap<TaskId, EdgesEntry, BuildNoHashHasher<TaskId>>,
 }
 
 impl TaskDependencySet {
     pub fn new() -> Self {
         Self {
-            edges: HashMap::default(),
+            edges: AutoMap::default(),
         }
     }
 
