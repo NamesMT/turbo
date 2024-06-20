@@ -1507,10 +1507,7 @@ impl Task {
             }
 
             match &mut state.state_type {
-                TaskStateType::Done {
-                    dependencies,
-                    stateful,
-                } => {
+                TaskStateType::Done { stateful } => {
                     if *stateful {
                         return false;
                     }
