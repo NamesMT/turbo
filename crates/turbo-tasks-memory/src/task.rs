@@ -338,7 +338,7 @@ enum TaskStateType {
     /// on activation this will move to Scheduled
     Dirty {
         event: Event,
-        outdated_dependencies: TaskDependenciesList,
+        outdated_dependencies: TaskDependencySet,
     },
 
     /// Execution is invalid and scheduled
@@ -346,7 +346,7 @@ enum TaskStateType {
     /// on start this will move to InProgress or Dirty depending on active flag
     Scheduled {
         event: Event,
-        outdated_dependencies: TaskDependenciesList,
+        outdated_dependencies: TaskDependencySet,
     },
 
     /// Execution is happening
@@ -357,9 +357,9 @@ enum TaskStateType {
     InProgress {
         event: Event,
         count_as_finished: bool,
-        /// Children that need to be disconnected once leaving this state
-        outdated_children: TaskIdSet,
-        outdated_dependencies: TaskDependenciesList,
+        /// Dependencies and children that need to be disconnected once leaving
+        /// this state
+        outdated_dependencies: TaskDependencySet,
         outdated_collectibles: MaybeCollectibles,
     },
 
@@ -368,7 +368,7 @@ enum TaskStateType {
     /// on finish this will move to Scheduled
     InProgressDirty {
         event: Event,
-        outdated_dependencies: TaskDependenciesList,
+        outdated_dependencies: TaskDependencySet,
     },
 }
 
@@ -596,7 +596,7 @@ impl Task {
         }
     }
 
-    fn clear_dependencies_set(
+    fn clear_dependencies_list(
         &self,
         dependencies: TaskDependenciesList,
         backend: &MemoryBackend,
@@ -647,12 +647,10 @@ impl Task {
                 } => {
                     let event = event.take();
                     let outdated_dependencies = take(outdated_dependencies);
-                    let outdated_children = take(&mut state.children);
                     let outdated_collectibles = take(&mut state.collectibles);
                     state.state_type = InProgress {
                         event,
                         count_as_finished: false,
-                        outdated_children,
                         outdated_dependencies,
                         outdated_collectibles,
                     };
@@ -741,7 +739,6 @@ impl Task {
         };
         let TaskStateType::InProgress {
             ref mut count_as_finished,
-            ref mut outdated_children,
             ref mut outdated_collectibles,
             ..
         } = state.state_type
@@ -754,7 +751,6 @@ impl Task {
         *count_as_finished = true;
         let mut aggregation_context = TaskAggregationContext::new(turbo_tasks, backend);
         {
-            let outdated_children = take(outdated_children);
             let outdated_collectibles = outdated_collectibles.take_collectibles();
 
             let mut change = TaskChange {
@@ -771,18 +767,8 @@ impl Task {
             let change_job = state
                 .aggregation_node
                 .apply_change(&aggregation_context, change);
-            let remove_job = if outdated_children.is_empty() {
-                None
-            } else {
-                Some(state.aggregation_node.handle_lost_edges(
-                    &aggregation_context,
-                    &self.id,
-                    outdated_children,
-                ))
-            };
             drop(state);
             change_job.apply(&aggregation_context);
-            remove_job.apply(&aggregation_context);
         }
         aggregation_context.apply_queued_updates();
     }
@@ -862,16 +848,14 @@ impl Task {
                     InProgress {
                         ref mut event,
                         count_as_finished,
-                        ref mut outdated_children,
                         ref mut outdated_dependencies,
                         ref mut outdated_collectibles,
                     } => {
                         let event = event.take();
-                        let outdated_children = take(outdated_children);
                         let mut outdated_dependencies = take(outdated_dependencies);
                         let outdated_collectibles = outdated_collectibles.take_collectibles();
                         let new_dependencies = take(&mut dependencies);
-                        outdated_dependencies.remove(&new_dependencies);
+                        outdated_dependencies.remove_all(&new_dependencies);
                         if !backend.has_gc() {
                             // This will stay here for longer, so make sure to not consume too much
                             // memory
@@ -900,6 +884,7 @@ impl Task {
                                 .aggregation_node
                                 .apply_change(&aggregation_context, change);
                         }
+                        let outdated_children = outdated_dependencies.drain_children();
                         if !outdated_children.is_empty() {
                             remove_job = state.aggregation_node.handle_lost_edges(
                                 &aggregation_context,
@@ -909,7 +894,7 @@ impl Task {
                         }
                         event.notify(usize::MAX);
                         drop(state);
-                        self.clear_dependencies_set(outdated_dependencies, backend, turbo_tasks);
+                        self.clear_dependencies(outdated_dependencies, backend, turbo_tasks);
                     }
                     InProgressDirty {
                         ref mut event,
@@ -920,7 +905,7 @@ impl Task {
                             // TODO Could be more efficent
                             dependencies.insert(dep);
                         }
-                        let outdated_dependencies = take(&mut dependencies).into_list();
+                        let outdated_dependencies = take(&mut dependencies);
                         state.state_type = Scheduled {
                             event,
                             outdated_dependencies,
@@ -1014,7 +999,7 @@ impl Task {
                     ref mut dependencies,
                     ..
                 } => {
-                    let outdated_dependencies = take(dependencies);
+                    let outdated_dependencies = take(dependencies).into_set();
                     // add to dirty lists and potentially schedule
                     let description = self.get_event_description();
                     let should_schedule = force_schedule || active;
@@ -1065,12 +1050,10 @@ impl Task {
                 InProgress {
                     ref mut event,
                     count_as_finished,
-                    ref mut outdated_children,
                     ref mut outdated_dependencies,
                     ref mut outdated_collectibles,
                 } => {
                     let event = event.take();
-                    let outdated_children = take(outdated_children);
                     let outdated_dependencies = take(outdated_dependencies);
                     let outdated_collectibles = outdated_collectibles.take_collectibles();
                     let change = if count_as_finished {
@@ -1100,18 +1083,12 @@ impl Task {
                             .aggregation_node
                             .apply_change(&aggregation_context, change)
                     });
-                    let remove_job = state.aggregation_node.handle_lost_edges(
-                        &aggregation_context,
-                        &self.id,
-                        outdated_children,
-                    );
                     state.state_type = InProgressDirty {
                         event,
                         outdated_dependencies,
                     };
                     drop(state);
                     change_job.apply(&aggregation_context);
-                    remove_job.apply(&aggregation_context);
                 }
             }
         }
@@ -1288,10 +1265,11 @@ impl Task {
                 let mut state = self.full_state_mut();
                 if state.children.insert(child_id) {
                     if let TaskStateType::InProgress {
-                        outdated_children, ..
+                        outdated_dependencies,
+                        ..
                     } = &mut state.state_type
                     {
-                        if outdated_children.remove(&child_id) {
+                        if outdated_dependencies.remove(TaskDependency::Child(child_id)) {
                             drop(state);
                             aggregation_context.apply_queued_updates();
                             return;
@@ -1527,6 +1505,7 @@ impl Task {
     ) -> bool {
         let mut aggregation_context = TaskAggregationContext::new(turbo_tasks, backend);
         let mut clear_dependencies = None;
+        let mut clear_dependencies_set = None;
         let mut change_job = None;
         let TaskState {
             ref mut aggregation_node,
@@ -1558,7 +1537,7 @@ impl Task {
                 // We want to get rid of this Event, so notify it to make sure it's empty.
                 event.notify(usize::MAX);
                 if !outdated_dependencies.is_empty() {
-                    clear_dependencies = Some(take(outdated_dependencies));
+                    clear_dependencies_set = Some(take(outdated_dependencies));
                 }
             }
             _ => {
@@ -1636,7 +1615,10 @@ impl Task {
         // removing dependencies We can clear the dependencies as we are already
         // marked as dirty
         if let Some(dependencies) = clear_dependencies {
-            self.clear_dependencies_set(dependencies, backend, turbo_tasks);
+            self.clear_dependencies_list(dependencies, backend, turbo_tasks);
+        }
+        if let Some(dependencies) = clear_dependencies_set {
+            self.clear_dependencies(dependencies, backend, turbo_tasks);
         }
 
         aggregation_context.apply_queued_updates();
