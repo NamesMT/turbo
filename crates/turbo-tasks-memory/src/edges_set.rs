@@ -442,13 +442,13 @@ impl EdgesEntry {
 
 #[derive(Default)]
 pub struct TaskDependencySet {
-    edges: AutoMap<TaskId, EdgesEntry, BuildNoHashHasher<TaskId>>,
+    edges: Box<AutoMap<TaskId, EdgesEntry, BuildNoHashHasher<TaskId>>>,
 }
 
 impl TaskDependencySet {
     pub fn new() -> Self {
         Self {
-            edges: AutoMap::default(),
+            edges: Default::default(),
         }
     }
 
@@ -577,7 +577,7 @@ pub struct TaskDependenciesList {
 impl TaskDependenciesList {
     pub fn into_set(self) -> TaskDependencySet {
         TaskDependencySet {
-            edges: self.edges.into_iter().collect(),
+            edges: Box::new(self.edges.into_iter().collect()),
         }
     }
 
