@@ -317,7 +317,6 @@ enum TaskStateType {
     Done {
         /// true, when the task has state and that can't be dropped
         stateful: bool,
-
         /// Cells/Outputs/Collectibles that the task has read during execution.
         /// And children that are connected to this task.
         /// The Task will keep these tasks alive as invalidations that happen
