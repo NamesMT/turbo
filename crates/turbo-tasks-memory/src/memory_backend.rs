@@ -164,15 +164,17 @@ impl MemoryBackend {
         false
     }
 
-    pub fn gc_all_tasks(&self) {
+    pub fn gc_all_tasks(&self) -> usize {
         let all_ids = self
             .task_cache
             .iter()
             .map(|entry| *entry.value())
             .collect::<Vec<_>>();
+        let len = all_ids.len();
         for task_id in all_ids {
             self.with_task(task_id, |task| task.run_gc(u32::MAX));
         }
+        len
     }
 
     fn insert_and_connect_fresh_task<K: Eq + Hash, H: BuildHasher + Clone>(
