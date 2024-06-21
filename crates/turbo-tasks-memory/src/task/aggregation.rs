@@ -13,7 +13,7 @@ use turbo_tasks::{event::Event, RawVc, TaskId, TaskIdSet, TraitTypeId, TurboTask
 
 use super::{
     meta_state::{FullTaskWriteGuard, TaskMetaStateWriteGuard},
-    TaskStateType,
+    InProgressState, TaskStateType,
 };
 use crate::{
     aggregation::{
@@ -461,11 +461,11 @@ impl<'l> AggregationNodeGuard for TaskGuard<'l> {
         match self.guard {
             TaskMetaStateWriteGuard::Full(ref guard) => match &guard.state_type {
                 TaskStateType::Done { edges, .. } => IntoIters::One(edges.children()),
-                TaskStateType::InProgress {
+                TaskStateType::InProgress(box InProgressState {
                     outdated_edges,
                     new_children,
                     ..
-                } => IntoIters::Two(
+                }) => IntoIters::Two(
                     outdated_edges
                         .children()
                         .chain(new_children.iter().copied()),
@@ -494,10 +494,10 @@ impl<'l> AggregationNodeGuard for TaskGuard<'l> {
                 if !matches!(
                     guard.state_type,
                     TaskStateType::Done { .. }
-                        | TaskStateType::InProgress {
+                        | TaskStateType::InProgress (box InProgressState{
                             count_as_finished: true,
                             ..
-                        }
+                        })
                 ) {
                     change.unfinished = 1;
                     #[cfg(feature = "track_unfinished")]
@@ -511,10 +511,10 @@ impl<'l> AggregationNodeGuard for TaskGuard<'l> {
                         change.collectibles.push((trait_type_id, collectible, 1));
                     }
                 }
-                if let TaskStateType::InProgress {
+                if let TaskStateType::InProgress(box InProgressState {
                     outdated_collectibles,
                     ..
-                } = &guard.state_type
+                }) = &guard.state_type
                 {
                     if let Some(collectibles) = outdated_collectibles.as_ref() {
                         for (&(trait_type_id, collectible), _) in collectibles.iter() {
@@ -540,10 +540,10 @@ impl<'l> AggregationNodeGuard for TaskGuard<'l> {
                 if !matches!(
                     guard.state_type,
                     TaskStateType::Done { .. }
-                        | TaskStateType::InProgress {
+                        | TaskStateType::InProgress (box InProgressState{
                             count_as_finished: true,
                             ..
-                        }
+                        })
                 ) {
                     change.unfinished = -1;
                     #[cfg(feature = "track_unfinished")]
@@ -557,10 +557,10 @@ impl<'l> AggregationNodeGuard for TaskGuard<'l> {
                         change.collectibles.push((trait_type_id, collectible, -1));
                     }
                 }
-                if let TaskStateType::InProgress {
+                if let TaskStateType::InProgress(box InProgressState {
                     outdated_collectibles,
                     ..
-                } = &guard.state_type
+                }) = &guard.state_type
                 {
                     if let Some(collectibles) = outdated_collectibles.as_ref() {
                         for (&(trait_type_id, collectible), _) in collectibles.iter() {

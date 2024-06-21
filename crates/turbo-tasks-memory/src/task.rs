@@ -309,6 +309,16 @@ impl MaybeCollectibles {
     }
 }
 
+struct InProgressState {
+    event: Event,
+    count_as_finished: bool,
+    /// Dependencies and children that need to be disconnected once leaving
+    /// this state
+    outdated_edges: TaskEdgesSet,
+    new_children: TaskIdSet,
+    outdated_collectibles: MaybeCollectibles,
+}
+
 enum TaskStateType {
     /// Ready
     ///
@@ -347,15 +357,7 @@ enum TaskStateType {
     /// on finish this will move to Done
     ///
     /// on invalidation this will move to InProgressDirty
-    InProgress {
-        event: Event,
-        count_as_finished: bool,
-        /// Dependencies and children that need to be disconnected once leaving
-        /// this state
-        outdated_edges: TaskEdgesSet,
-        new_children: TaskIdSet,
-        outdated_collectibles: MaybeCollectibles,
-    },
+    InProgress(Box<InProgressState>),
 
     /// Invalid execution is happening
     ///
@@ -642,13 +644,13 @@ impl Task {
                     let event = event.take();
                     let outdated_edges = take(outdated_edges);
                     let outdated_collectibles = take(&mut state.collectibles);
-                    state.state_type = InProgress {
+                    state.state_type = InProgress(Box::new(InProgressState {
                         event,
                         count_as_finished: false,
                         outdated_edges,
                         outdated_collectibles,
                         new_children: Default::default(),
-                    };
+                    }));
                 }
                 Dirty { .. } => {
                     let state_type = Task::state_string(&state);
@@ -732,11 +734,11 @@ impl Task {
         let TaskMetaStateWriteGuard::Full(mut state) = self.state_mut() else {
             return;
         };
-        let TaskStateType::InProgress {
+        let TaskStateType::InProgress(box InProgressState {
             ref mut count_as_finished,
             ref mut outdated_collectibles,
             ..
-        } = state.state_type
+        }) = state.state_type
         else {
             return;
         };
@@ -840,13 +842,13 @@ impl Task {
                     .gc
                     .execution_completed(duration, memory_usage, generation);
                 match state.state_type {
-                    InProgress {
+                    InProgress(box InProgressState {
                         ref mut event,
                         count_as_finished,
                         ref mut outdated_edges,
                         ref mut outdated_collectibles,
                         ref mut new_children,
-                    } => {
+                    }) => {
                         let event = event.take();
                         let mut outdated_edges = take(outdated_edges);
                         let outdated_collectibles = outdated_collectibles.take_collectibles();
@@ -1046,13 +1048,13 @@ impl Task {
                         change_job.apply(&aggregation_context);
                     }
                 }
-                InProgress {
+                InProgress(box InProgressState {
                     ref mut event,
                     count_as_finished,
                     ref mut outdated_edges,
                     ref mut outdated_collectibles,
                     ref mut new_children,
-                } => {
+                }) => {
                     let event = event.take();
                     let mut outdated_edges = take(outdated_edges);
                     for child in take(new_children) {
@@ -1241,14 +1243,14 @@ impl Task {
     fn state_string(state: &TaskState) -> &'static str {
         match state.state_type {
             Scheduled { .. } => "scheduled",
-            InProgress {
+            InProgress(box InProgressState {
                 count_as_finished: false,
                 ..
-            } => "in progress",
-            InProgress {
+            }) => "in progress",
+            InProgress(box InProgressState {
                 count_as_finished: true,
                 ..
-            } => "in progress (marked as finished)",
+            }) => "in progress (marked as finished)",
             InProgressDirty { .. } => "in progress (dirty)",
             Done { .. } => "done",
             Dirty { .. } => "dirty",
@@ -1267,11 +1269,11 @@ impl Task {
             {
                 let mut state = self.full_state_mut();
                 match &mut state.state_type {
-                    TaskStateType::InProgress {
+                    TaskStateType::InProgress(box InProgressState {
                         outdated_edges,
                         new_children,
                         ..
-                    } => {
+                    }) => {
                         if new_children.insert(child_id) {
                             if outdated_edges.remove(TaskEdge::Child(child_id)) {
                                 drop(state);
@@ -1395,7 +1397,7 @@ impl Task {
                 Ok(Err(listener))
             }
             Scheduled { ref event, .. }
-            | InProgress { ref event, .. }
+            | InProgress(box InProgressState { ref event, .. })
             | InProgressDirty { ref event, .. } => {
                 let listener = event.listen_with_note(note);
                 drop(state);
